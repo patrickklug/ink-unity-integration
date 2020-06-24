@@ -200,9 +200,30 @@ namespace Ink.UnityIntegration {
 			Debug.LogError("Entered Play Mode while Ink was still compiling! Your story will not be up to date. Recommend exiting and re-entering play mode.\nWe normally delay entering play mode when compiling, so you've found an edge case!");
 		}
 
-		public static void CompileInk (params InkFile[] inkFiles) {
-            CompileInk(inkFiles, false, null);
-        }
+		private static List<Action> _postAssetDataBaseRefreshActions = new List<Action>();
+
+		public static void CompileInk(params InkFile[] inkFiles)
+		{
+			_postAssetDataBaseRefreshActions.Clear();
+			AssetDatabase.DisallowAutoRefresh();
+			try
+			{
+				CompileInk(inkFiles, true, null);//use immediate=true to avoid thread access issues.
+			}
+			finally
+			{
+				AssetDatabase.AllowAutoRefresh();
+			}
+			AssetDatabase.Refresh();
+
+			foreach (var action in _postAssetDataBaseRefreshActions)
+				action();
+			_postAssetDataBaseRefreshActions.Clear();
+
+			InkLibrary.Save();
+			InkMetaLibrary.Save();
+		}
+
 		public static void CompileInk (InkFile[] inkFiles, bool immediate, Action onComplete) {
             InkLibrary.Validate();
             if(onComplete != null) onCompleteActions.Add(onComplete);
@@ -258,7 +279,7 @@ namespace Ink.UnityIntegration {
 			};
 
 			InkLibrary.Instance.compilationStack.Add(pendingFile);
-			InkLibrary.Save();
+			//InkLibrary.Save();
 			if(immediate) {
                 CompileInkThreaded(pendingFile);
                 Update();
@@ -308,17 +329,20 @@ namespace Ink.UnityIntegration {
 			bool errorsFound = false;
 			StringBuilder filesCompiledLog = new StringBuilder("Files compiled:");
 			foreach (var compilingFile in InkLibrary.Instance.compilationStack) {
-				
+
 				// Complete status is also set when an error occured, in these cases 'compiledJson' will be null so there's no import to process
 				if (compilingFile.compiledJson != null)
 				{
 					// Write new compiled data to the file system
 					File.WriteAllText(compilingFile.jsonAbsoluteFilePath, compilingFile.compiledJson, Encoding.UTF8);
-                    AssetDatabase.ImportAsset(compilingFile.jsonAbsoluteFilePath);
-                    var jsonObject = AssetDatabase.LoadAssetAtPath<TextAsset>(compilingFile.inkFile.jsonPath);
+					_postAssetDataBaseRefreshActions.Add(() =>
+					{
+						//AssetDatabase.ImportAsset(compilingFile.jsonAbsoluteFilePath);
+						var jsonObject = AssetDatabase.LoadAssetAtPath<TextAsset>(compilingFile.inkFile.jsonPath);
 
-					// Update the jsonAsset reference
-					compilingFile.inkFile.jsonAsset = jsonObject;
+						// Update the jsonAsset reference
+						compilingFile.inkFile.jsonAsset = jsonObject;
+					});
 				}
 
 				longestTimeTaken = Mathf.Max (compilingFile.timeTaken);
@@ -382,8 +406,8 @@ namespace Ink.UnityIntegration {
 			}
 
 			InkLibrary.Instance.compilationStack.Clear();
-			InkLibrary.Save();
-			InkMetaLibrary.Save();
+			//InkLibrary.Save();
+			//InkMetaLibrary.Save();
 
 			#if !UNITY_EDITOR_LINUX
 			EditorUtility.ClearProgressBar();
